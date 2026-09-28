@@ -1,0 +1,89 @@
+# Contesto
+
+Ora voglio confrontare tre implementazioni in modo misurabile, senza toccare quella in produzione.
+
+# Obiettivi
+
+## 1. Implementazione A: produzione (NON modificare)
+- Il codice attuale della table view e del suo cell template resta invariato: stessi file, stesso comportamento.
+- Se serve un punto di aggancio per il flag (vedi sotto), deve essere minimo, isolato e non deve cambiare il comportamento di default.
+
+## 2. Implementazione B: fork con FrameworkElement custom
+- Crea una copia (fork) dell'implementazione attuale in una cartella/namespace separato (es. `[Namespace].Variants.CustomElement`).
+- Applica a questa copia la modifica già preparata con il FrameworkElement custom.
+- Non riapplicare la modifica sul codice di produzione. Se la modifica è già stata applicata lì, riportala allo stato originale e spostala nel fork.
+
+## 3. Implementazione C: ottimizzazione restando in XAML
+- Crea un secondo fork, partendo sempre dall'implementazione di produzione.
+- L'obiettivo è ottenere un cell template più leggero **senza** FrameworkElement custom, restando il più possibile in XAML.
+- Prima di scrivere codice, analizza il template attuale e riporta:
+  - l'albero visuale di una singola cella (tipi di elementi e profondità);
+  - il numero di elementi visuali per cella;
+  - i binding, i converter, i trigger e gli stili coinvolti.
+- Poi esplora e applica tecniche come (valuta caso per caso, non applicarle alla cieca):
+  - ridurre la profondità dell'albero (es. un solo `TextBlock` con `Padding`/`Background` invece di `Border` + `Grid` + `TextBlock`);
+  - usare `TextBlock` invece di `Label`/`ContentControl` dove possibile;
+  - evitare elementi `Collapsed` sempre presenti nel template: usare template alternativi o selettori solo dove serve;
+  - ridurre i converter e usare binding `OneTime` dove i dati non cambiano;
+  - brush e risorse statiche congelate (`PresentationOptions:Freeze="True"`), `StaticResource` invece di `DynamicResource` dove possibile;
+  - tooltip e contenuti opzionali creati in modo lazy;
+  - verificare le impostazioni di virtualizzazione (`VirtualizingPanel.IsVirtualizing`, `VirtualizationMode="Recycling"`, `ScrollUnit`, virtualizzazione delle colonne se applicabile).
+- Se una tecnica richiede di uscire da XAML (es. un Control custom con ControlTemplate in Generic.xaml), non applicarla direttamente: documentala come opzione separata con pro e contro.
+
+## 4. Selezione tramite flag
+- Aggiungi un meccanismo per scegliere a runtime quale implementazione usare, es. un enum `CellRenderingMode { Production, CustomElement, XamlOptimized }`.
+- Il default deve essere `Production`.
+- Il flag deve essere impostabile in modo semplice ([specificare: setting di configurazione / variabile d'ambiente / proprietà sul controllo / argomento da riga di comando]).
+- Le tre implementazioni devono esporre la stessa API pubblica, in modo che il codice chiamante non cambi.
+
+## 5. Equivalenza funzionale
+Per B e C verifica e documenta che il comportamento sia equivalente alla produzione, almeno per:
+- rendering del contenuto e formattazione dei valori;
+- allineamento, padding, colori, font, bordi;
+- selezione, hover, focus ed eventuale editing;
+- tooltip, stati condizionali e stili applicati tramite trigger;
+- scrolling e virtualizzazione;
+- DPI diversi e layout rounding.
+Elenca esplicitamente qualsiasi differenza che non sei riuscito a eliminare.
+
+## 6. Profiling e benchmark
+Crea un harness di benchmark (progetto separato o finestra dedicata, es. `[NomeSoluzione].Benchmarks`) che confronti le tre implementazioni.
+
+Scenari minimi:
+- tabella piccola: es. 5 colonne × 20 righe;
+- tabella media: es. 20 colonne × 500 righe;
+- tabella grande: es. 50 colonne × 10.000 righe;
+- rendi dimensioni e numero di iterazioni configurabili.
+
+Metriche per ogni scenario e implementazione:
+- **Tempo al primo render**: dall'assegnazione della sorgente dati fino al completamento del layout e del primo frame renderizzato (es. `Dispatcher` a priorità `ContextIdle` + `CompositionTarget.Rendering`). Misura con `Stopwatch`.
+- **Memoria allocata** durante il caricamento (`GC.GetAllocatedBytesForCurrentThread()` prima/dopo).
+- **Memoria trattenuta** dopo il render (`GC.GetTotalMemory(true)` dopo una GC completa, confrontata con la baseline).
+- **Numero di elementi visuali** creati (conteggio ricorsivo con `VisualTreeHelper`), in totale e per cella.
+- **Scrolling**: tempo medio per frame durante uno scroll programmatico, con verticale e orizzontale separati se applicabile.
+- Numero di collection GC (gen0/gen1/gen2) durante ogni scenario.
+
+Regole di misura:
+- build Release, senza debugger collegato;
+- iterazioni di warm-up scartate, poi N iterazioni misurate; riporta mediana, min, max;
+- ogni misura parte da una finestra/istanza pulita, per non falsare la memoria;
+- stessa dimensione della finestra e stesso DPI per tutti i run.
+
+Output:
+- tabella riepilogativa in console e file CSV/Markdown con una riga per combinazione (implementazione × scenario);
+- differenze percentuali di B e C rispetto ad A.
+
+# Vincoli
+- Nessuna modifica di comportamento all'implementazione di produzione.
+- Codice duplicato tra i fork accettabile: preferisci la chiarezza del confronto alla deduplicazione.
+- Niente nuove dipendenze esterne senza chiedere prima. Se BenchmarkDotNet si rivela utile per parti non-UI, proponilo.
+
+# Modo di lavorare
+1. Analizza il codice attuale e la modifica già fatta. Presentami un piano breve: struttura dei file, punto di aggancio del flag, approccio del benchmark.
+2. Aspetta la mia conferma prima di procedere.
+3. Implementa in quest'ordine: fork B → flag → harness di benchmark → fork C.
+4. Alla fine consegnami:
+   - elenco dei file creati e modificati;
+   - risultati del benchmark;
+   - analisi dei risultati, con pro/contro di manutenibilità per B e C;
+   - differenze funzionali residue.
